@@ -8,11 +8,16 @@ export const AGENTS = [
 ];
 
 const BY_ID = new Map(AGENTS.map((a) => [a.id, a]));
-export const RULE_FILENAMES = new Set(AGENTS.map((a) => a.filename));
+
+// A source file is a "rule file" only if its basename is one of these
+// canonical names. Repo authors pick CLAUDE.md or AGENTS.md as the single
+// source of truth per directory; we render it to the user's selected
+// agent filenames at install time.
+export const CANONICAL_RULE_FILENAMES = new Set(["CLAUDE.md", "AGENTS.md"]);
 
 export function isRuleFile(relPath) {
   const base = relPath.split("/").pop();
-  return RULE_FILENAMES.has(base);
+  return CANONICAL_RULE_FILENAMES.has(base);
 }
 
 export function agentById(id) {

@@ -1,6 +1,8 @@
 # apply-agent-rules
 
-Install agent rules — `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursorrules`, `.windsurfrules`, `.clinerules` — into a target project, preserving directory structure. Works like `npx skills`: any git repo is a valid source. Pick which agents you want; the same source file is mirrored to each agent's expected filename in the same directory.
+Install agent rules into a target project, preserving directory structure. Works like `npx skills`: any git repo is a valid source.
+
+Source repos keep a **single canonical rule file per directory** — either `CLAUDE.md` or `AGENTS.md`. At install time you pick which agents you want (`claude`, `codex`, `gemini`, `cursor`, `windsurf`, `cline`), and that one source file is rendered to each selected agent's expected filename in the same directory. No need to duplicate the same content under six names in your rules repo.
 
 ## Quick start
 
@@ -19,29 +21,31 @@ npx apply-agent-rules update
 
 1. Resolves the source: GitHub shorthand and git URLs are cloned shallowly into a temp dir; local paths are used directly.
 2. Walks the source tree.
-3. For each **rule file** (basename in `{CLAUDE.md, AGENTS.md, GEMINI.md, .cursorrules, .windsurfrules, .clinerules}`), writes a copy at the same relative directory with each selected agent's filename.
-4. All other files are copied as-is.
+3. For each **canonical rule file** (basename `CLAUDE.md` or `AGENTS.md`), writes a copy at the same relative directory under each selected agent's expected filename.
+4. All other files — assets, configs, even files literally named `GEMINI.md` or `.cursorrules` in the source — are copied verbatim with no renaming.
 5. Existing files are skipped by default — re-running is safe. Use `--force` to overwrite.
 6. Writes `.apply-agent-rules.lock.json` recording source, ref, commit, agents, and a SHA-256 for every installed file. `update` uses this to detect local edits and prune deletes.
 
-Example. Source:
+Example. Source repo (author chose CLAUDE.md as their canonical name):
 
 ```
+database/seeders/CLAUDE.md
 app/Models/CLAUDE.md
-app/config/CLAUDE.md
 app/Models/notes.txt
 ```
 
-`apply leek/repo --agents claude,codex --target ./my-app` produces:
+`apply leek/repo --agents codex --target ./my-app` produces:
 
 ```
-my-app/app/Models/CLAUDE.md
-my-app/app/Models/AGENTS.md
-my-app/app/Models/notes.txt
-my-app/app/config/CLAUDE.md
-my-app/app/config/AGENTS.md
+my-app/database/seeders/AGENTS.md      (rendered from CLAUDE.md)
+my-app/app/Models/AGENTS.md            (rendered from CLAUDE.md)
+my-app/app/Models/notes.txt            (copied as-is)
 my-app/.apply-agent-rules.lock.json
 ```
+
+No `CLAUDE.md` files are written because the user only picked `codex`.
+
+If two canonical rule files live in the same directory (`CLAUDE.md` and `AGENTS.md` side by side), `AGENTS.md` wins for any target filename you don't have a literal match for, and a warning prints. Pick one canonical name per directory.
 
 ## Agents
 

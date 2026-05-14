@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveSource } from "./resolve-source.js";
 import { globToRegex, toPosix } from "./glob.js";
-import { isRuleFile } from "./agents.js";
+import { isRuleFile, scopeDirOwner } from "./agents.js";
 import {
   hashBuffer,
   hashFile,
@@ -142,6 +142,7 @@ export function planFiles({ files, agents, includeRes, excludeRes }) {
   const excludedPaths = [];
   let excluded = 0;
   const dstSet = new Map();
+  const selectedIds = new Set(agents.map((a) => a.id));
 
   for (const rel of files) {
     const posix = toPosix(rel);
@@ -154,6 +155,19 @@ export function planFiles({ files, agents, includeRes, excludeRes }) {
     if (includeRes.length > 0 && !includeRes.some((re) => re.test(posix))) {
       excluded++;
       excludedPaths.push(posix);
+      continue;
+    }
+
+    const owner = scopeDirOwner(posix);
+    if (owner) {
+      if (!selectedIds.has(owner.id)) {
+        excluded++;
+        excludedPaths.push(posix);
+        continue;
+      }
+      if (dstSet.has(posix)) continue;
+      dstSet.set(posix, posix);
+      actions.push({ relSrc: rel, relDst: rel, agent: owner.id });
       continue;
     }
 

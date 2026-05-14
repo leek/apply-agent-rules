@@ -52,16 +52,31 @@ If two canonical rule files live in the same directory (`CLAUDE.md` and `AGENTS.
 
 ## Agents
 
-| id | filename |
-|---|---|
-| `claude` | `CLAUDE.md` |
-| `codex` | `AGENTS.md` |
-| `gemini` | `GEMINI.md` |
-| `cursor` | `.cursorrules` |
-| `windsurf` | `.windsurfrules` |
-| `cline` | `.clinerules` |
+| id | canonical filename | scope dir |
+|---|---|---|
+| `claude` | `CLAUDE.md` | `.claude/` |
+| `codex` | `AGENTS.md` | `.codex/` |
+| `gemini` | `GEMINI.md` | — |
+| `cursor` | `.cursorrules` | `.cursor/` |
+| `windsurf` | `.windsurfrules` | — |
+| `cline` | `.clinerules` | — |
 
-When you run `apply` without `--agents`, an interactive prompt asks which to install for. Agents already present in your target tree are preselected.
+When you run `apply` without `--agents`, an interactive prompt asks which to install for. Agents already present in your target tree (canonical filename or scope dir) are preselected.
+
+### Agent scope directories
+
+Some rule repos include agent-specific content that has no equivalent in other agents — e.g. `.claude/rules/*.md` (Claude Code's path-scoped rules), `.claude/commands/*.json`, `.cursor/rules/*.mdc`, `.codex/config.toml`. Anything inside a recognized scope dir is **copied verbatim only when that agent is selected**; otherwise the whole subtree is excluded. No renaming or mirroring happens for scoped files — they're already in the format that one agent expects.
+
+Example. Source repo:
+
+```
+.claude/rules/php.md
+.claude/commands.json
+.cursor/rules/foo.mdc
+app/Models/CLAUDE.md
+```
+
+`apply --agents claude` produces `.claude/...` + `app/Models/CLAUDE.md` (skips `.cursor/`). `apply --agents codex` produces `app/Models/AGENTS.md` only (skips both `.claude/` and `.cursor/`).
 
 ## Source formats
 

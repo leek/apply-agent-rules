@@ -64,11 +64,21 @@ export async function selectAgents({ target, preselect } = {}) {
 }
 
 function detectFromTarget(target) {
-  // Preselect agents that already have rule files anywhere in the target tree.
+  // Preselect agents that already have rule files or a scope directory
+  // anywhere in the target tree.
   const found = new Set();
   if (!target || !fs.existsSync(target)) return new Set(["claude"]);
 
-  const wanted = new Map(AGENTS.map((a) => [a.filename, a.id]));
+  const filenameToId = new Map(AGENTS.map((a) => [a.filename, a.id]));
+  const scopeDirToId = new Map(
+    AGENTS.filter((a) => a.scopeDir).map((a) => [a.scopeDir, a.id])
+  );
+
+  // Cheap check: any agent scopeDir at the target root counts.
+  for (const [dirName, id] of scopeDirToId) {
+    if (fs.existsSync(path.join(target, dirName))) found.add(id);
+  }
+
   const stack = [target];
   let visited = 0;
   while (stack.length && visited < 5000) {
@@ -84,8 +94,8 @@ function detectFromTarget(target) {
       if (e.isDirectory()) {
         if (e.name === ".git" || e.name === "node_modules") continue;
         stack.push(path.join(dir, e.name));
-      } else if (e.isFile() && wanted.has(e.name)) {
-        found.add(wanted.get(e.name));
+      } else if (e.isFile() && filenameToId.has(e.name)) {
+        found.add(filenameToId.get(e.name));
       }
     }
   }

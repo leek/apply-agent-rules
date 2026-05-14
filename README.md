@@ -1,5 +1,9 @@
 # apply-agent-rules
 
+[![npm version](https://img.shields.io/npm/v/apply-agent-rules.svg)](https://www.npmjs.com/package/apply-agent-rules)
+[![npm downloads](https://img.shields.io/npm/dm/apply-agent-rules.svg)](https://www.npmjs.com/package/apply-agent-rules)
+[![license](https://img.shields.io/npm/l/apply-agent-rules.svg)](./LICENSE)
+
 Install agent rules into a target project, preserving directory structure. Works like `npx skills`: any git repo is a valid source.
 
 Source repos keep a **single canonical rule file per directory** — either `CLAUDE.md` or `AGENTS.md`. At install time you pick which agents you want (`claude`, `codex`, `gemini`, `cursor`, `windsurf`, `cline`), and that one source file is rendered to each selected agent's expected filename in the same directory. No need to duplicate the same content under six names in your rules repo.

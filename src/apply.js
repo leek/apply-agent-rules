@@ -2,6 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveSource } from "./resolve-source.js";
 import { globToRegex, toPosix } from "./glob.js";
+import { isRuleFile } from "./agents.js";
+import {
+  hashBuffer,
+  hashFile,
+  readLockfile,
+  writeLockfile,
+  LOCKFILE_NAME,
+} from "./lockfile.js";
 
 const DEFAULT_EXCLUDES = [
   ".git",
@@ -16,54 +24,58 @@ const DEFAULT_EXCLUDES = [
   "LICENSE.md",
   ".gitignore",
   ".gitattributes",
+  LOCKFILE_NAME,
 ];
 
-export async function apply({ source, target, dryRun, verbose, force, include, exclude }) {
-  const { dir: sourceDir, cleanup } = await resolveSource(source);
+export async function apply({
+  source,
+  target,
+  dryRun,
+  verbose,
+  force,
+  include,
+  exclude,
+  agents,
+}) {
+  if (!agents || agents.length === 0) {
+    throw new Error("apply: no agents selected.");
+  }
+
+  const resolved = await resolveSource(source);
+  const { dir: sourceDir, cleanup, kind, ref, commit } = resolved;
 
   try {
-    if (!fs.existsSync(target)) {
-      if (dryRun) {
-        log(`[dry-run] would create target directory ${target}`);
-      } else {
-        fs.mkdirSync(target, { recursive: true });
-      }
-    } else if (!fs.statSync(target).isDirectory()) {
-      throw new Error(`target exists but is not a directory: ${target}`);
-    }
+    ensureTargetDir(target, dryRun);
 
     const includeRes = include.map(globToRegex);
     const excludeRes = [...DEFAULT_EXCLUDES, ...exclude].map(globToRegex);
 
-    const stats = { copied: 0, skipped: 0, excluded: 0, dirsCreated: 0 };
-    const files = walk(sourceDir);
+    const plan = planFiles({
+      files: walk(sourceDir),
+      agents,
+      includeRes,
+      excludeRes,
+    });
 
-    console.log(`source: ${source}`);
-    console.log(`target: ${target}`);
-    if (dryRun) console.log("mode:   dry-run (no changes will be made)");
+    console.log(
+      `source:  ${source}${ref ? ` @${ref}` : ""}${commit ? ` (${commit.slice(0, 7)})` : ""}`
+    );
+    console.log(`target:  ${target}`);
+    console.log(`agents:  ${agents.map((a) => a.id).join(", ")}`);
+    if (dryRun) console.log("mode:    dry-run (no changes will be made)");
     console.log("");
 
-    for (const rel of files) {
-      const posix = toPosix(rel);
+    const stats = { copied: 0, skipped: 0, excluded: plan.excluded };
+    const installed = [];
 
-      if (excludeRes.some((re) => re.test(posix))) {
-        stats.excluded++;
-        if (verbose) log(`  excluded  ${posix}`);
-        continue;
-      }
-      if (includeRes.length > 0 && !includeRes.some((re) => re.test(posix))) {
-        stats.excluded++;
-        if (verbose) log(`  filtered  ${posix}`);
-        continue;
-      }
-
-      const src = path.join(sourceDir, rel);
-      const dst = path.join(target, rel);
+    for (const action of plan.actions) {
+      const dst = path.join(target, action.relDst);
+      const src = path.join(sourceDir, action.relSrc);
       const dstDir = path.dirname(dst);
 
       if (fs.existsSync(dst) && !force) {
         stats.skipped++;
-        log(`  skip      ${posix}  (already exists)`);
+        log(`  skip      ${action.relDst}  (already exists)`);
         continue;
       }
 
@@ -73,29 +85,119 @@ export async function apply({ source, target, dryRun, verbose, force, include, e
         } else {
           fs.mkdirSync(dstDir, { recursive: true });
         }
-        stats.dirsCreated++;
       }
 
-      if (dryRun) {
-        log(`  copy      ${posix}`);
-      } else {
+      const label = action.relDst === action.relSrc ? "copy" : "render";
+      const suffix = action.relDst !== action.relSrc ? `  (from ${action.relSrc})` : "";
+      if (!dryRun) {
         fs.copyFileSync(src, dst);
-        log(`  copy      ${posix}`);
       }
+      log(`  ${label.padEnd(9)} ${action.relDst}${suffix}`);
       stats.copied++;
+
+      installed.push({
+        path: toPosix(action.relDst),
+        fromSource: toPosix(action.relSrc),
+        sha256: dryRun ? hashBuffer(fs.readFileSync(src)) : hashFile(dst),
+        agent: action.agent ?? null,
+      });
+    }
+
+    if (verbose) {
+      for (const ex of plan.excludedPaths) log(`  excluded  ${ex}`);
+    }
+
+    if (!dryRun) {
+      const existing = readLockfile(target);
+      writeLockfile(target, {
+        source,
+        kind,
+        ref: ref ?? null,
+        commit: commit ?? null,
+        installedAt: new Date().toISOString(),
+        agents: mergeAgents(existing?.agents ?? [], agents.map((a) => a.id)),
+        files: mergeFiles(existing?.files ?? [], installed),
+      });
     }
 
     console.log("");
     console.log(
-      `${dryRun ? "[dry-run] " : ""}done. ` +
-        `copied: ${stats.copied}, skipped: ${stats.skipped}, excluded: ${stats.excluded}`
+      `${dryRun ? "[dry-run] " : ""}done. copied: ${stats.copied}, skipped: ${stats.skipped}, excluded: ${stats.excluded}`
     );
   } finally {
     await cleanup();
   }
 }
 
-function walk(root) {
+export function planFiles({ files, agents, includeRes, excludeRes }) {
+  const actions = [];
+  const excludedPaths = [];
+  let excluded = 0;
+  const dstSet = new Map();
+
+  for (const rel of files) {
+    const posix = toPosix(rel);
+
+    if (excludeRes.some((re) => re.test(posix))) {
+      excluded++;
+      excludedPaths.push(posix);
+      continue;
+    }
+    if (includeRes.length > 0 && !includeRes.some((re) => re.test(posix))) {
+      excluded++;
+      excludedPaths.push(posix);
+      continue;
+    }
+
+    if (isRuleFile(posix)) {
+      const dir = posix.includes("/") ? posix.slice(0, posix.lastIndexOf("/") + 1) : "";
+      for (const agent of agents) {
+        const relDst = dir + agent.filename;
+        if (dstSet.has(relDst)) {
+          const prev = dstSet.get(relDst);
+          if (prev !== posix) {
+            console.warn(
+              `  warn      ${relDst} written by ${prev}; ignoring duplicate from ${posix}`
+            );
+          }
+          continue;
+        }
+        dstSet.set(relDst, posix);
+        actions.push({ relSrc: rel, relDst, agent: agent.id });
+      }
+    } else {
+      if (dstSet.has(posix)) continue;
+      dstSet.set(posix, posix);
+      actions.push({ relSrc: rel, relDst: rel, agent: null });
+    }
+  }
+
+  return { actions, excluded, excludedPaths };
+}
+
+function ensureTargetDir(target, dryRun) {
+  if (!fs.existsSync(target)) {
+    if (dryRun) {
+      log(`[dry-run] would create target directory ${target}`);
+    } else {
+      fs.mkdirSync(target, { recursive: true });
+    }
+  } else if (!fs.statSync(target).isDirectory()) {
+    throw new Error(`target exists but is not a directory: ${target}`);
+  }
+}
+
+function mergeAgents(prev, next) {
+  return [...new Set([...prev, ...next])];
+}
+
+function mergeFiles(prev, next) {
+  const byPath = new Map(prev.map((f) => [f.path, f]));
+  for (const f of next) byPath.set(f.path, f);
+  return [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path));
+}
+
+export function walk(root) {
   const out = [];
   const stack = [""];
   while (stack.length) {
@@ -109,7 +211,6 @@ function walk(root) {
       } else if (entry.isFile()) {
         out.push(childRel);
       }
-      // symlinks intentionally skipped to keep this safe
     }
   }
   return out.sort();
@@ -118,3 +219,5 @@ function walk(root) {
 function log(msg) {
   console.log(msg);
 }
+
+export { DEFAULT_EXCLUDES };

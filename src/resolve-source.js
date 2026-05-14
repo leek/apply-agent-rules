@@ -7,10 +7,11 @@ const GITHUB_SHORTHAND = /^([\w.-]+)\/([\w.-]+)(?:@(.+))?$/;
 
 /**
  * Resolve a source string to a local directory containing the rules tree.
- * Returns { dir, cleanup }. Caller must call cleanup() when done.
+ * Returns { dir, cleanup, kind, source, ref, commit }.
+ * kind is "local" or "git". commit is null for local sources.
+ * Caller must call cleanup() when done.
  */
 export async function resolveSource(source) {
-  // Local path - either absolute, or starts with ./ or ../, or is an existing dir
   if (
     source.startsWith("./") ||
     source.startsWith("../") ||
@@ -24,10 +25,16 @@ export async function resolveSource(source) {
     if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
       throw new Error(`local source not found or not a directory: ${abs}`);
     }
-    return { dir: abs, cleanup: async () => {} };
+    return {
+      dir: abs,
+      cleanup: async () => {},
+      kind: "local",
+      source,
+      ref: null,
+      commit: null,
+    };
   }
 
-  // owner/repo or owner/repo@ref -> github url
   const sh = source.match(GITHUB_SHORTHAND);
   let cloneUrl;
   let ref;
@@ -35,7 +42,6 @@ export async function resolveSource(source) {
     cloneUrl = `https://github.com/${sh[1]}/${sh[2]}.git`;
     ref = sh[3];
   } else if (/^https?:\/\//.test(source) || /^git@/.test(source) || source.endsWith(".git")) {
-    // Strip trailing ".git" only when re-parsing for #ref support
     const [base, fragment] = source.split("#");
     cloneUrl = base.endsWith(".git") ? base : `${base}.git`;
     ref = fragment;
@@ -45,10 +51,10 @@ export async function resolveSource(source) {
     );
   }
 
-  return cloneRepo(cloneUrl, ref);
+  return cloneRepo({ cloneUrl, ref, source });
 }
 
-function cloneRepo(cloneUrl, ref) {
+function cloneRepo({ cloneUrl, ref, source }) {
   ensureGit();
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "apply-agent-rules-"));
   const args = ["clone", "--depth", "1"];
@@ -64,11 +70,20 @@ function cloneRepo(cloneUrl, ref) {
     );
   }
 
+  const rev = spawnSync("git", ["-C", tmp, "rev-parse", "HEAD"], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const commit = rev.status === 0 ? rev.stdout.toString().trim() : null;
+
   return {
     dir: tmp,
     cleanup: async () => {
       fs.rmSync(tmp, { recursive: true, force: true });
     },
+    kind: "git",
+    source,
+    ref: ref ?? null,
+    commit,
   };
 }
 

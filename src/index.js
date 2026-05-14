@@ -1,35 +1,56 @@
 import path from "node:path";
 import { apply } from "./apply.js";
+import { update } from "./update.js";
+import { AGENTS, parseAgentList } from "./agents.js";
+import { selectAgents } from "./select.js";
+import { readLockfile } from "./lockfile.js";
 
-const USAGE = `apply-agent-rules - copy a rules repo into your project tree
+const USAGE = `apply-agent-rules - install agent rules (CLAUDE.md, AGENTS.md, etc.) into your project
 
 USAGE
-  npx apply-agent-rules apply <source> [options]
-  npx apply-agent-rules add   <source> [options]   (alias for apply)
+  npx apply-agent-rules apply  <source> [options]
+  npx apply-agent-rules add    <source> [options]    (alias for apply)
+  npx apply-agent-rules update           [options]   (re-pull from recorded source)
 
 SOURCE
-  owner/repo                       GitHub shorthand (defaults to main branch)
+  owner/repo                       GitHub shorthand (defaults to default branch)
   owner/repo@ref                   GitHub shorthand at a branch, tag, or sha
   https://github.com/owner/repo    Full GitHub URL
   git@github.com:owner/repo.git    SSH git URL
-  https://gitlab.com/org/repo      Any git URL
   ./local/path                     Local path (no clone)
 
-OPTIONS
+AGENTS
+  ${AGENTS.map((a) => `${a.id.padEnd(10)} -> ${a.filename}`).join("\n  ")}
+
+OPTIONS (apply)
   -t, --target <dir>     Target project root (default: cwd)
+      --agents <list>    Comma list of agent ids, or 'all'. e.g. claude,codex
+                         If omitted, prompts interactively (TTY only).
   -d, --dry-run          Print what would happen, copy nothing
   -v, --verbose          Print every file action
   -f, --force            Overwrite existing files (default: skip)
       --include <glob>   Only copy paths matching this glob (repeatable)
       --exclude <glob>   Skip paths matching this glob (repeatable)
-                         Built-in excludes: .git, node_modules, .DS_Store, README.md, LICENSE
   -h, --help             Show this help
 
+OPTIONS (update)
+  -t, --target <dir>     Target project root (default: cwd)
+      --source <src>     Override source from lockfile
+      --ref <ref>        Override ref (branch/tag/sha)
+      --no-prune         Don't delete files removed from source (default: prune)
+  -d, --dry-run          Print what would happen, change nothing
+  -v, --verbose          Print every file action
+  -f, --force            Overwrite drift and prune locally-modified files
+      --include <glob>   Only consider paths matching this glob (repeatable)
+      --exclude <glob>   Skip paths matching this glob (repeatable)
+
 EXAMPLES
-  npx apply-agent-rules apply leek/laravel-claude-rules
-  npx apply-agent-rules apply leek/laravel-claude-rules@v1.2.0
-  npx apply-agent-rules apply leek/laravel-claude-rules --target ./my-app --dry-run
-  npx apply-agent-rules apply ./local-rules-repo --include 'app/**'
+  npx apply-agent-rules apply leek/laravel-rules --agents claude,codex
+  npx apply-agent-rules apply leek/laravel-rules@v1.2.0 --target ./my-app
+  npx apply-agent-rules apply ./local-rules-repo --agents all --dry-run
+  npx apply-agent-rules update                       # re-pull, prune deletes
+  npx apply-agent-rules update --ref main            # pin to a ref
+  npx apply-agent-rules update --no-prune --force    # overwrite drift, keep stale
 `;
 
 export async function run(argv) {
@@ -39,27 +60,58 @@ export async function run(argv) {
   }
 
   const [cmd, ...rest] = argv;
-  if (cmd !== "apply" && cmd !== "add") {
-    throw new Error(`unknown command "${cmd}". run with --help for usage.`);
+
+  if (cmd === "apply" || cmd === "add") {
+    const opts = parseOpts(rest, { requireSource: true });
+    const target = path.resolve(opts.target ?? process.cwd());
+    const agents = opts.agentsRaw
+      ? parseAgentList(opts.agentsRaw)
+      : await selectAgents({ target, preselect: lockfileAgents(target) });
+    if (agents.length === 0) throw new Error("no agents selected.");
+
+    await apply({
+      source: opts.source,
+      target,
+      dryRun: opts.dryRun,
+      verbose: opts.verbose,
+      force: opts.force,
+      include: opts.include,
+      exclude: opts.exclude,
+      agents,
+    });
+    return;
   }
 
-  const opts = parseOpts(rest);
-  if (!opts.source) {
-    throw new Error("missing <source>. run with --help for usage.");
+  if (cmd === "update") {
+    const opts = parseOpts(rest, { requireSource: false });
+    const target = path.resolve(opts.target ?? process.cwd());
+    await update({
+      target,
+      dryRun: opts.dryRun,
+      verbose: opts.verbose,
+      force: opts.force,
+      prune: opts.prune,
+      ref: opts.refOverride,
+      source: opts.sourceOverride,
+      include: opts.include,
+      exclude: opts.exclude,
+    });
+    return;
   }
 
-  await apply({
-    source: opts.source,
-    target: path.resolve(opts.target ?? process.cwd()),
-    dryRun: opts.dryRun,
-    verbose: opts.verbose,
-    force: opts.force,
-    include: opts.include,
-    exclude: opts.exclude,
-  });
+  throw new Error(`unknown command "${cmd}". run with --help for usage.`);
 }
 
-function parseOpts(args) {
+function lockfileAgents(target) {
+  try {
+    const lock = readLockfile(target);
+    return lock?.agents ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function parseOpts(args, { requireSource }) {
   const opts = {
     source: null,
     target: null,
@@ -68,6 +120,10 @@ function parseOpts(args) {
     force: false,
     include: [],
     exclude: [],
+    agentsRaw: null,
+    prune: true,
+    refOverride: null,
+    sourceOverride: null,
   };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -94,6 +150,21 @@ function parseOpts(args) {
       case "--exclude":
         opts.exclude.push(args[++i]);
         break;
+      case "--agents":
+        opts.agentsRaw = args[++i];
+        break;
+      case "--prune":
+        opts.prune = true;
+        break;
+      case "--no-prune":
+        opts.prune = false;
+        break;
+      case "--ref":
+        opts.refOverride = args[++i];
+        break;
+      case "--source":
+        opts.sourceOverride = args[++i];
+        break;
       default:
         if (a.startsWith("-")) {
           throw new Error(`unknown flag "${a}"`);
@@ -103,6 +174,9 @@ function parseOpts(args) {
         }
         opts.source = a;
     }
+  }
+  if (requireSource && !opts.source) {
+    throw new Error("missing <source>. run with --help for usage.");
   }
   return opts;
 }

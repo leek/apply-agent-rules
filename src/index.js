@@ -39,6 +39,9 @@ OPTIONS (update)
   -t, --target <dir>     Target project root (default: cwd)
       --source <src>     Override source from lockfile
       --ref <ref>        Override ref (branch/tag/sha)
+      --agents <list>    Replace the agent set in the lockfile. Files belonging
+                         to dropped agents are pruned (use --no-prune to keep,
+                         --force to drop locally-modified ones too).
       --no-prune         Don't delete files removed from source (default: prune)
   -d, --dry-run          Print what would happen, change nothing
   -v, --verbose          Print every file action
@@ -60,6 +63,7 @@ EXAMPLES
   npx apply-agent-rules list  leek/laravel-agent-rules --agents gemini,codex
   npx apply-agent-rules update                       # re-pull, prune deletes
   npx apply-agent-rules update --ref main            # pin to a ref
+  npx apply-agent-rules update --agents claude       # drop other agents, prune their files
   npx apply-agent-rules update --no-prune --force    # overwrite drift, keep stale
 `;
 
@@ -108,6 +112,7 @@ export async function run(argv) {
   if (cmd === "update") {
     const opts = parseOpts(rest, { requireSource: false });
     const target = path.resolve(opts.target ?? process.cwd());
+    const agents = opts.agentsRaw ? parseAgentList(opts.agentsRaw) : null;
     await update({
       target,
       dryRun: opts.dryRun,
@@ -118,6 +123,7 @@ export async function run(argv) {
       source: opts.sourceOverride,
       include: opts.include,
       exclude: opts.exclude,
+      agents,
     });
     return;
   }

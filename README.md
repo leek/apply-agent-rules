@@ -113,9 +113,16 @@ Re-resolves the source from the lockfile and reconciles:
 ```bash
 npx apply-agent-rules update                    # re-pull, default prune on
 npx apply-agent-rules update --ref main         # change ref
+npx apply-agent-rules update --agents claude    # drop other agents, prune their files
 npx apply-agent-rules update --no-prune         # keep removed files
 npx apply-agent-rules update --force            # overwrite drift, prune modified
 npx apply-agent-rules update --dry-run -v       # preview everything
+```
+
+Pass `--agents` to **replace** the recorded agent set. Files for dropped agents (rendered files like `AGENTS.md`, plus their scope dirs like `.codex/`) are pruned on the same pass. Locally-modified files are kept unless you also pass `--force`. Pass `--no-prune` to keep them. Example: switch a project from `claude,codex` to `claude` only:
+
+```bash
+npx apply-agent-rules update --agents claude
 ```
 
 ## Options
@@ -139,6 +146,7 @@ npx apply-agent-rules update --dry-run -v       # preview everything
 | `-t, --target <dir>` | Target project root (default: cwd) |
 | `--source <src>` | Override source from lockfile |
 | `--ref <ref>` | Override the ref (branch/tag/sha) |
+| `--agents <list>` | Replace the agent set; dropped agents' files are pruned |
 | `--no-prune` | Don't delete files that vanished from source |
 | `-f, --force` | Overwrite drift and prune locally-modified files |
 | `-d, --dry-run`, `-v, --verbose` | as above |

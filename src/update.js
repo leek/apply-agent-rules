@@ -21,6 +21,7 @@ export async function update({
   source: sourceOverride,
   include,
   exclude,
+  agents: agentsOverride,
 }) {
   const lock = readLockfile(target);
   if (!lock) {
@@ -30,12 +31,20 @@ export async function update({
   }
 
   const source = sourceOverride ?? applyRefOverride(lock.source, refOverride);
-  const agents = (lock.agents ?? []).map(agentById).filter(Boolean);
+  const agents =
+    agentsOverride && agentsOverride.length > 0
+      ? agentsOverride
+      : (lock.agents ?? []).map(agentById).filter(Boolean);
   if (agents.length === 0) {
     throw new Error(
       `lockfile has no agents recorded. re-run 'apply-agent-rules apply' to reset.`
     );
   }
+  const agentIds = agents.map((a) => a.id);
+  const agentsChanged =
+    agentsOverride &&
+    JSON.stringify([...agentIds].sort()) !==
+      JSON.stringify([...(lock.agents ?? [])].sort());
 
   const resolved = await resolveSource(source);
   const { dir: sourceDir, cleanup, kind, ref, commit } = resolved;
@@ -141,7 +150,7 @@ export async function update({
         commit: commit ?? null,
         installedAt: lock.installedAt,
         updatedAt: new Date().toISOString(),
-        agents: lock.agents,
+        agents: agentsChanged ? agentIds : lock.agents,
         files: newFiles.sort((a, b) => a.path.localeCompare(b.path)),
       });
     }

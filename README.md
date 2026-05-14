@@ -131,7 +131,7 @@ npx apply-agent-rules update --dry-run -v       # preview everything
 
 ## Built-in excludes
 
-Always skipped: `.git/`, `node_modules/`, `.DS_Store`, `README.md`, `LICENSE`, `.gitignore`, `.gitattributes`, `.apply-agent-rules.lock.json`. Add more with `--exclude '<glob>'` (repeatable).
+Always skipped: `.git/`, `node_modules/`, `.DS_Store`, `**/README.md`, `**/README`, `**/LICENSE`, `**/LICENSE.md`, `**/LICENSE.txt`, `.gitignore`, `.gitattributes`, `.apply-agent-rules.lock.json`. READMEs and license files are treated as repo documentation and skipped at every level. Add more with `--exclude '<glob>'` (repeatable).
 
 Globs support `*`, `**`, `?`, `[abc]`, and `{a,b,c}`. Paths are matched in posix form regardless of OS.
 

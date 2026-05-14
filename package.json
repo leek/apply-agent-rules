@@ -1,6 +1,6 @@
 {
   "name": "apply-agent-rules",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Apply an agent rules repo (CLAUDE.md, AGENTS.md, .cursorrules, etc.) into a target project tree. npx-style installer.",
   "bin": {
     "apply-agent-rules": "./bin/cli.js"
@@ -31,5 +31,8 @@
     "rules",
     "ai"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@clack/prompts": "^0.11.0"
+  }
 }

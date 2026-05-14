@@ -1,6 +1,6 @@
-import readline from "node:readline";
 import fs from "node:fs";
 import path from "node:path";
+import { multiselect, isCancel, cancel } from "@clack/prompts";
 import { AGENTS } from "./agents.js";
 
 export async function selectAgents({ target, preselect } = {}) {
@@ -12,55 +12,27 @@ export async function selectAgents({ target, preselect } = {}) {
   }
 
   const defaults =
-    preselect && preselect.length > 0 ? new Set(preselect) : detectFromTarget(target);
-  const selected = new Set(defaults);
+    preselect && preselect.length > 0
+      ? new Set(preselect)
+      : detectFromTarget(target);
 
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const ask = (q) => new Promise((r) => rl.question(q, r));
+  const result = await multiselect({
+    message: "Select agents to install for:",
+    options: AGENTS.map((a) => ({
+      value: a.id,
+      label: `${a.label.padEnd(10)} (${a.filename})`,
+    })),
+    initialValues: AGENTS.filter((a) => defaults.has(a.id)).map((a) => a.id),
+    required: true,
+  });
 
-  try {
-    while (true) {
-      process.stdout.write("\nSelect agents to install for:\n");
-      AGENTS.forEach((a, i) => {
-        const mark = selected.has(a.id) ? "x" : " ";
-        process.stdout.write(
-          `  [${mark}] ${i + 1}. ${a.label.padEnd(10)} (${a.filename})\n`
-        );
-      });
-      const ans = (
-        await ask("\n  Numbers to toggle, 'a'=all, 'n'=none, ENTER=confirm: ")
-      )
-        .trim()
-        .toLowerCase();
-
-      if (ans === "") {
-        if (selected.size === 0) {
-          process.stdout.write("  (nothing selected — pick at least one)\n");
-          continue;
-        }
-        break;
-      }
-      if (ans === "a") {
-        AGENTS.forEach((a) => selected.add(a.id));
-        continue;
-      }
-      if (ans === "n") {
-        selected.clear();
-        continue;
-      }
-      for (const tok of ans.split(/[\s,]+/)) {
-        const n = Number.parseInt(tok, 10);
-        if (!Number.isInteger(n) || n < 1 || n > AGENTS.length) continue;
-        const id = AGENTS[n - 1].id;
-        if (selected.has(id)) selected.delete(id);
-        else selected.add(id);
-      }
-    }
-  } finally {
-    rl.close();
+  if (isCancel(result)) {
+    cancel("Cancelled.");
+    process.exit(130);
   }
 
-  return AGENTS.filter((a) => selected.has(a.id));
+  const picked = new Set(result);
+  return AGENTS.filter((a) => picked.has(a.id));
 }
 
 function detectFromTarget(target) {

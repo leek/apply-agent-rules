@@ -8,6 +8,7 @@ import {
   hashFile,
   readLockfile,
   writeLockfile,
+  sourceKey,
   LOCKFILE_NAME,
 } from "./lockfile.js";
 
@@ -117,15 +118,24 @@ export async function apply({
 
     if (!dryRun) {
       const existing = readLockfile(target);
-      writeLockfile(target, {
+      const sources = existing?.sources ? [...existing.sources] : [];
+      const key = sourceKey(source);
+      const idx = sources.findIndex((s) => sourceKey(s.source) === key);
+      const prev = idx >= 0 ? sources[idx] : null;
+      const now = new Date().toISOString();
+      const entry = {
         source,
         kind,
         ref: ref ?? null,
         commit: commit ?? null,
-        installedAt: new Date().toISOString(),
-        agents: mergeAgents(existing?.agents ?? [], agents.map((a) => a.id)),
-        files: mergeFiles(existing?.files ?? [], installed),
-      });
+        installedAt: prev?.installedAt ?? now,
+        updatedAt: now,
+        agents: mergeAgents(prev?.agents ?? [], agents.map((a) => a.id)),
+        files: mergeFiles(prev?.files ?? [], installed),
+      };
+      if (idx >= 0) sources[idx] = entry;
+      else sources.push(entry);
+      writeLockfile(target, { sources });
     }
 
     console.log("");

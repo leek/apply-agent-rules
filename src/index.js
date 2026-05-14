@@ -11,7 +11,7 @@ const USAGE = `apply-agent-rules - install agent rules (CLAUDE.md, AGENTS.md, et
 USAGE
   npx apply-agent-rules apply  <source> [options]
   npx apply-agent-rules add    <source> [options]    (alias for apply)
-  npx apply-agent-rules update           [options]   (re-pull from recorded source)
+  npx apply-agent-rules update [source]  [options]   (re-pull a recorded source; required if multiple are installed)
   npx apply-agent-rules list   <source> [options]    (preview a source, write nothing)
 
 SOURCE
@@ -61,10 +61,11 @@ EXAMPLES
   npx apply-agent-rules apply ./local-rules-repo --agents all --dry-run
   npx apply-agent-rules list  leek/laravel-agent-rules
   npx apply-agent-rules list  leek/laravel-agent-rules --agents gemini,codex
-  npx apply-agent-rules update                       # re-pull, prune deletes
-  npx apply-agent-rules update --ref main            # pin to a ref
-  npx apply-agent-rules update --agents claude       # drop other agents, prune their files
-  npx apply-agent-rules update --no-prune --force    # overwrite drift, keep stale
+  npx apply-agent-rules update                                   # re-pull (single source)
+  npx apply-agent-rules update leek/filament-agent-rules         # target one of several sources
+  npx apply-agent-rules update leek/laravel-agent-rules --ref v2 # pin a source to a ref
+  npx apply-agent-rules update --agents claude                   # drop other agents, prune their files
+  npx apply-agent-rules update --no-prune --force                # overwrite drift, keep stale
 `;
 
 export async function run(argv) {
@@ -120,7 +121,7 @@ export async function run(argv) {
       force: opts.force,
       prune: opts.prune,
       ref: opts.refOverride,
-      source: opts.sourceOverride,
+      source: opts.sourceOverride ?? opts.source,
       include: opts.include,
       exclude: opts.exclude,
       agents,
@@ -134,7 +135,10 @@ export async function run(argv) {
 function lockfileAgents(target) {
   try {
     const lock = readLockfile(target);
-    return lock?.agents ?? [];
+    if (!lock?.sources) return [];
+    const ids = new Set();
+    for (const s of lock.sources) for (const id of s.agents ?? []) ids.add(id);
+    return [...ids];
   } catch {
     return [];
   }

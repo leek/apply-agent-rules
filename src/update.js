@@ -2,11 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveSource } from "./resolve-source.js";
 import { globToRegex, toPosix } from "./glob.js";
-import { agentById, isRuleFile } from "./agents.js";
+import { agentById } from "./agents.js";
 import {
   hashFile,
   readLockfile,
   writeLockfile,
+  findSourceEntry,
+  sourceKey,
   LOCKFILE_NAME,
 } from "./lockfile.js";
 import { DEFAULT_EXCLUDES, planFiles, walk } from "./apply.js";
@@ -18,33 +20,51 @@ export async function update({
   force,
   prune,
   ref: refOverride,
-  source: sourceOverride,
+  source: sourceArg,
   include,
   exclude,
   agents: agentsOverride,
 }) {
   const lock = readLockfile(target);
-  if (!lock) {
+  if (!lock || !lock.sources || lock.sources.length === 0) {
     throw new Error(
       `no lockfile (${LOCKFILE_NAME}) in ${target}. run 'apply-agent-rules apply <source>' first.`
     );
   }
 
-  const source = sourceOverride ?? applyRefOverride(lock.source, refOverride);
+  let entry;
+  if (sourceArg) {
+    entry = findSourceEntry(lock, sourceArg);
+    if (!entry) {
+      const known = lock.sources.map((s) => s.source).join(", ");
+      throw new Error(
+        `source "${sourceArg}" not found in lockfile. known sources: ${known}`
+      );
+    }
+  } else if (lock.sources.length === 1) {
+    entry = lock.sources[0];
+  } else {
+    const known = lock.sources.map((s) => s.source).join(", ");
+    throw new Error(
+      `multiple sources in lockfile (${known}). pass the source as a positional arg or via --source.`
+    );
+  }
+
+  const source = applyRefOverride(entry.source, refOverride);
   const agents =
     agentsOverride && agentsOverride.length > 0
       ? agentsOverride
-      : (lock.agents ?? []).map(agentById).filter(Boolean);
+      : (entry.agents ?? []).map(agentById).filter(Boolean);
   if (agents.length === 0) {
     throw new Error(
-      `lockfile has no agents recorded. re-run 'apply-agent-rules apply' to reset.`
+      `lockfile entry for ${entry.source} has no agents recorded. re-run 'apply-agent-rules apply' to reset.`
     );
   }
   const agentIds = agents.map((a) => a.id);
   const agentsChanged =
     agentsOverride &&
     JSON.stringify([...agentIds].sort()) !==
-      JSON.stringify([...(lock.agents ?? [])].sort());
+      JSON.stringify([...(entry.agents ?? [])].sort());
 
   const resolved = await resolveSource(source);
   const { dir: sourceDir, cleanup, kind, ref, commit } = resolved;
@@ -60,7 +80,7 @@ export async function update({
       excludeRes,
     });
 
-    const lockByPath = new Map((lock.files ?? []).map((f) => [f.path, f]));
+    const lockByPath = new Map((entry.files ?? []).map((f) => [f.path, f]));
     const planByPath = new Map(plan.actions.map((a) => [toPosix(a.relDst), a]));
 
     console.log(
@@ -114,8 +134,13 @@ export async function update({
     }
 
     if (prune) {
+      const ownedByOtherSources = collectOwnedPaths(lock, entry);
       for (const [relDst, prevEntry] of lockByPath) {
         if (planByPath.has(relDst)) continue;
+        if (ownedByOtherSources.has(relDst)) {
+          if (verbose) log(`  keep      ${relDst}  (owned by another source)`);
+          continue;
+        }
         const dst = path.join(target, relDst);
         const localHash = fs.existsSync(dst) ? hashFile(dst) : null;
 
@@ -143,16 +168,22 @@ export async function update({
     }
 
     if (!dryRun) {
-      writeLockfile(target, {
-        source: lock.source,
+      const sources = lock.sources.map((s) => s);
+      const idx = sources.findIndex(
+        (s) => sourceKey(s.source) === sourceKey(entry.source)
+      );
+      const updated = {
+        source: entry.source,
         kind,
-        ref: ref ?? lock.ref ?? null,
+        ref: ref ?? entry.ref ?? null,
         commit: commit ?? null,
-        installedAt: lock.installedAt,
+        installedAt: entry.installedAt,
         updatedAt: new Date().toISOString(),
-        agents: agentsChanged ? agentIds : lock.agents,
+        agents: agentsChanged ? agentIds : entry.agents,
         files: newFiles.sort((a, b) => a.path.localeCompare(b.path)),
-      });
+      };
+      sources[idx] = updated;
+      writeLockfile(target, { sources });
     }
 
     console.log("");
@@ -162,6 +193,16 @@ export async function update({
   } finally {
     await cleanup();
   }
+}
+
+function collectOwnedPaths(lock, currentEntry) {
+  const out = new Set();
+  const currentKey = sourceKey(currentEntry.source);
+  for (const s of lock.sources) {
+    if (sourceKey(s.source) === currentKey) continue;
+    for (const f of s.files ?? []) out.add(f.path);
+  }
+  return out;
 }
 
 function buildEntry(action, sha256) {

@@ -7,11 +7,14 @@ Source repos keep a **single canonical rule file per directory** — either `CLA
 ## Quick start
 
 ```bash
+# Preview a source repo without writing anything
+npx apply-agent-rules list leek/laravel-agent-rules --agents claude,codex
+
 # Pick agents interactively, install into the current directory
-npx apply-agent-rules apply leek/laravel-rules
+npx apply-agent-rules apply leek/laravel-agent-rules
 
 # Or pass agents non-interactively
-npx apply-agent-rules apply leek/laravel-rules --agents claude,codex
+npx apply-agent-rules apply leek/laravel-agent-rules --agents claude,codex
 
 # Re-pull from the recorded source (preserves local edits, prunes deletes)
 npx apply-agent-rules update
@@ -69,6 +72,18 @@ npx apply-agent-rules apply https://github.com/owner/repo
 npx apply-agent-rules apply git@github.com:owner/repo.git
 npx apply-agent-rules apply ./local-rules-repo
 ```
+
+## `list`
+
+Resolves a source (same formats as `apply`) and prints what it contains without writing anything. Useful for verifying a rules repo before installing.
+
+```bash
+npx apply-agent-rules list leek/laravel-agent-rules
+npx apply-agent-rules list leek/laravel-agent-rules --agents codex,gemini
+npx apply-agent-rules list ./local-rules --verbose            # also show excluded
+```
+
+If `--agents` is passed, each rule file is shown with the destination filenames it would render to.
 
 ## `update`
 

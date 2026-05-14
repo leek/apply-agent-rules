@@ -1,6 +1,7 @@
 import path from "node:path";
 import { apply } from "./apply.js";
 import { update } from "./update.js";
+import { list } from "./list.js";
 import { AGENTS, parseAgentList } from "./agents.js";
 import { selectAgents } from "./select.js";
 import { readLockfile } from "./lockfile.js";
@@ -11,6 +12,7 @@ USAGE
   npx apply-agent-rules apply  <source> [options]
   npx apply-agent-rules add    <source> [options]    (alias for apply)
   npx apply-agent-rules update           [options]   (re-pull from recorded source)
+  npx apply-agent-rules list   <source> [options]    (preview a source, write nothing)
 
 SOURCE
   owner/repo                       GitHub shorthand (defaults to default branch)
@@ -44,10 +46,18 @@ OPTIONS (update)
       --include <glob>   Only consider paths matching this glob (repeatable)
       --exclude <glob>   Skip paths matching this glob (repeatable)
 
+OPTIONS (list)
+  --agents <list>        Optional; if provided, preview rendered filenames
+      --include <glob>   Only consider paths matching this glob (repeatable)
+      --exclude <glob>   Skip paths matching this glob (repeatable)
+  -v, --verbose          Also list excluded files
+
 EXAMPLES
-  npx apply-agent-rules apply leek/laravel-rules --agents claude,codex
-  npx apply-agent-rules apply leek/laravel-rules@v1.2.0 --target ./my-app
+  npx apply-agent-rules apply leek/laravel-agent-rules --agents claude,codex
+  npx apply-agent-rules apply leek/laravel-agent-rules@v1.2.0 --target ./my-app
   npx apply-agent-rules apply ./local-rules-repo --agents all --dry-run
+  npx apply-agent-rules list  leek/laravel-agent-rules
+  npx apply-agent-rules list  leek/laravel-agent-rules --agents gemini,codex
   npx apply-agent-rules update                       # re-pull, prune deletes
   npx apply-agent-rules update --ref main            # pin to a ref
   npx apply-agent-rules update --no-prune --force    # overwrite drift, keep stale
@@ -78,6 +88,19 @@ export async function run(argv) {
       include: opts.include,
       exclude: opts.exclude,
       agents,
+    });
+    return;
+  }
+
+  if (cmd === "list" || cmd === "ls") {
+    const opts = parseOpts(rest, { requireSource: true });
+    const agents = opts.agentsRaw ? parseAgentList(opts.agentsRaw) : [];
+    await list({
+      source: opts.source,
+      agents,
+      include: opts.include,
+      exclude: opts.exclude,
+      verbose: opts.verbose,
     });
     return;
   }

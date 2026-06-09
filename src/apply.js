@@ -15,6 +15,8 @@ import {
 const DEFAULT_EXCLUDES = [
   ".git",
   ".git/**",
+  ".github",
+  ".github/**",
   "node_modules",
   "node_modules/**",
   ".DS_Store",

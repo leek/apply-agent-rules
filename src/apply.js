@@ -242,6 +242,17 @@ export function walk(root) {
         stack.push(childRel);
       } else if (entry.isFile()) {
         out.push(childRel);
+      } else if (entry.isSymbolicLink()) {
+        // rules repos may symlink rule files (e.g. .claude/rules/* -> a
+        // canonical CLAUDE.md); include them when they resolve to a file.
+        // copyFileSync follows the link, so the target gets a regular file.
+        try {
+          if (fs.statSync(path.join(abs, entry.name)).isFile()) {
+            out.push(childRel);
+          }
+        } catch {
+          // dangling symlink — skip
+        }
       }
     }
   }

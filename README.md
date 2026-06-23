@@ -6,6 +6,44 @@
 
 Install agent rules into a target project, preserving directory structure. Works like `npx skills`: any git repo is a valid source.
 
+## What is this? (read me first)
+
+**First, a feature of AI coding agents that a lot of people don't know about.** Most folks assume an agent reads a single rules file at the repo root (one `CLAUDE.md`, one `AGENTS.md`) and that's it. But agents like Claude Code, Codex, and Cursor also read rules files **inside subdirectories** — and a rules file in a folder only applies while the agent is working in that folder.
+
+That means you can put a `CLAUDE.md` in `app/Models/` with rules just for models, another in `database/migrations/` with rules just for migrations, and so on. Localized rules, sitting right next to the code they govern, automatically picked up when the agent touches that part of the tree. It's a powerful feature, and it's the whole reason this tool exists.
+
+The catch: those per-directory files are valuable but painful to share. Each agent reads a *different* filename (Claude Code → `CLAUDE.md`, Codex/others → `AGENTS.md`, Cursor → `.cursorrules`, Windsurf → `.windsurfrules`…), so if you want the same conventions across many repos you end up hand-copying a whole *tree* of files, under every agent's name, in every project. They drift instantly.
+
+`apply-agent-rules` fixes that. You keep one rules repo whose **directory layout mirrors a real project**, then install it into any project. The tool walks the whole tree and drops each rule file at the **same relative path**, rendered to whichever agents that project uses. `update` later re-pulls **without clobbering edits you've made locally**. Think `npx`-style installer, but for a directory tree of agent rules.
+
+### Simplest possible example
+
+You have a rules repo `leek/laravel-agent-rules`. Its layout mirrors a Laravel project, with a rule file *per directory*:
+
+```
+CLAUDE.md                       ← project-wide rules
+app/Models/CLAUDE.md            ← rules that apply only under app/Models
+database/migrations/CLAUDE.md   ← rules that apply only to migrations
+```
+
+From inside any project, run:
+
+```bash
+npx apply-agent-rules apply leek/laravel-agent-rules --agents claude,cursor
+```
+
+The tool reproduces that **entire tree** in your project, and because you picked two agents, each rule file lands under both agents' filenames at its original path:
+
+```
+CLAUDE.md                       .cursorrules
+app/Models/CLAUDE.md            app/Models/.cursorrules
+database/migrations/CLAUDE.md   database/migrations/.cursorrules
+```
+
+So your `app/Models` rules end up exactly where Claude Code and Cursor look for localized guidance — not flattened into one giant root file. Later, `npx apply-agent-rules update` re-pulls and refreshes the whole tree; anything you hand-edited locally is detected and left alone. That's the whole idea — the sections below are just the details.
+
+## How the source repo is structured
+
 Source repos keep a **single canonical rule file per directory** — either `CLAUDE.md` or `AGENTS.md`. At install time you pick which agents you want (`claude`, `codex`, `gemini`, `cursor`, `windsurf`, `cline`), and that one source file is rendered to each selected agent's expected filename in the same directory. No need to duplicate the same content under six names in your rules repo.
 
 ## Quick start

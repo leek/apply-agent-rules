@@ -133,7 +133,17 @@ export async function update({
           newFiles.push({ agent: action.agent ?? null, ...buildEntry(action, sourceHash, linkDst) });
           continue;
         }
-        if (!isLink && localHash && prevEntry && prevEntry.sha256 !== localHash && !force) {
+        // Converting is lossless when the local content already equals the
+        // incoming source, even if the lockfile hash is stale — only treat a
+        // file as drifted when it differs from BOTH the source and the lock.
+        if (
+          !isLink &&
+          localHash &&
+          localHash !== sourceHash &&
+          prevEntry &&
+          prevEntry.sha256 !== localHash &&
+          !force
+        ) {
           stats.drift++;
           log(`  drift     ${relDst}  (locally modified, skipping; use --force to overwrite)`);
           newFiles.push({ agent: action.agent ?? null, ...buildEntry(action, prevEntry.sha256) });

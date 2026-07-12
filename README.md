@@ -180,6 +180,7 @@ npx apply-agent-rules update --agents claude
 | `-f, --force` | Overwrite existing files |
 | `--include <glob>` | Only copy paths matching glob (repeatable) |
 | `--exclude <glob>` | Skip paths matching glob (repeatable) |
+| `--preserve-symlinks` | Recreate source symlinks as relative symlinks instead of copying content (see below) |
 
 ### `update`
 
@@ -193,6 +194,24 @@ npx apply-agent-rules update --agents claude
 | `-f, --force` | Overwrite drift and prune locally-modified files |
 | `-d, --dry-run`, `-v, --verbose` | as above |
 | `--include`, `--exclude` | as above |
+| `--preserve-symlinks` / `--no-preserve-symlinks` | Override the symlink mode recorded in the lockfile; unedited installed files are converted in place |
+
+## Symlinked rule files (`--preserve-symlinks`)
+
+Rules repos sometimes symlink one canonical file into several places — e.g. `.claude/rules/filament-schemas.md -> ../../app/Filament/Resources/Schemas/CLAUDE.md`, so one document serves both as a path-scoped rule and as a per-directory rule. By default those links are followed and the target project gets independent regular files (each is then free to drift on its own).
+
+Pass `--preserve-symlinks` to recreate the link structure instead: when a source file is a symlink **and** its destination is part of the same install, the target project gets a matching relative symlink, keeping a single canonical copy per document.
+
+```bash
+npx apply-agent-rules apply leek/filament-agent-rules --agents claude --preserve-symlinks
+```
+
+Details:
+
+- The mode is saved per source in the lockfile, so a plain `update` keeps it. Override per run with `--preserve-symlinks` / `--no-preserve-symlinks` — unedited files are converted in place (copies become links and vice versa); locally-modified files are never touched without `--force`.
+- A link is only recreated when its destination resolves **inside the source tree** and is installed by the same run (same agent). Anything else — links escaping the repo, dangling links, links to excluded files — falls back to the default copy behavior.
+- Local edits belong in the canonical file; drift detection tracks it there. Links the tool created are never themselves flagged as drift.
+- On filesystems where symlink creation fails (e.g. unprivileged Windows), the tool warns and copies instead.
 
 ## Built-in excludes
 

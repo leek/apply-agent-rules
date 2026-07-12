@@ -33,6 +33,11 @@ OPTIONS (apply)
   -f, --force            Overwrite existing files (default: skip)
       --include <glob>   Only copy paths matching this glob (repeatable)
       --exclude <glob>   Skip paths matching this glob (repeatable)
+      --preserve-symlinks
+                         Recreate source symlinks as relative symlinks in the
+                         target when the link's destination is installed too
+                         (default: follow links and copy content). Saved to
+                         the lockfile, so 'update' keeps the same mode.
   -h, --help             Show this help
 
 OPTIONS (update)
@@ -48,6 +53,11 @@ OPTIONS (update)
   -f, --force            Overwrite drift and prune locally-modified files
       --include <glob>   Only consider paths matching this glob (repeatable)
       --exclude <glob>   Skip paths matching this glob (repeatable)
+      --preserve-symlinks / --no-preserve-symlinks
+                         Override the symlink mode recorded in the lockfile.
+                         Converts unedited installed files in place (copies
+                         become links, links become copies) and records the
+                         new mode.
 
 OPTIONS (list)
   --agents <list>        Optional; if provided, preview rendered filenames
@@ -93,6 +103,7 @@ export async function run(argv) {
       include: opts.include,
       exclude: opts.exclude,
       agents,
+      preserveSymlinks: opts.preserveSymlinks,
     });
     return;
   }
@@ -125,6 +136,7 @@ export async function run(argv) {
       include: opts.include,
       exclude: opts.exclude,
       agents,
+      preserveSymlinks: opts.preserveSymlinks,
     });
     return;
   }
@@ -157,6 +169,7 @@ function parseOpts(args, { requireSource }) {
     prune: true,
     refOverride: null,
     sourceOverride: null,
+    preserveSymlinks: null,
   };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -191,6 +204,12 @@ function parseOpts(args, { requireSource }) {
         break;
       case "--no-prune":
         opts.prune = false;
+        break;
+      case "--preserve-symlinks":
+        opts.preserveSymlinks = true;
+        break;
+      case "--no-preserve-symlinks":
+        opts.preserveSymlinks = false;
         break;
       case "--ref":
         opts.refOverride = args[++i];

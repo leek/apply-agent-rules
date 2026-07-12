@@ -8,6 +8,7 @@ import {
   hashFile,
   readLockfile,
   writeLockfile,
+  findSourceEntry,
   sourceKey,
   LOCKFILE_NAME,
 } from "./lockfile.js";
@@ -47,10 +48,16 @@ export async function apply({
   include,
   exclude,
   agents,
+  preserveSymlinks = null,
 }) {
   if (!agents || agents.length === 0) {
     throw new Error("apply: no agents selected.");
   }
+
+  const existingLock = readLockfile(target);
+  const prevSourceEntry = existingLock ? findSourceEntry(existingLock, source) : null;
+  // Explicit flag wins; otherwise inherit what this source was installed with.
+  const preserve = preserveSymlinks ?? prevSourceEntry?.preserveSymlinks ?? false;
 
   const resolved = await resolveSource(source);
   const { dir: sourceDir, cleanup, kind, ref, commit } = resolved;
@@ -67,16 +74,18 @@ export async function apply({
       includeRes,
       excludeRes,
     });
+    const bySrc = actionsBySrc(plan.actions);
 
     console.log(
       `source:  ${source}${ref ? ` @${ref}` : ""}${commit ? ` (${commit.slice(0, 7)})` : ""}`
     );
     console.log(`target:  ${target}`);
     console.log(`agents:  ${agents.map((a) => a.id).join(", ")}`);
+    if (preserve) console.log("mode:    preserving source symlinks");
     if (dryRun) console.log("mode:    dry-run (no changes will be made)");
     console.log("");
 
-    const stats = { copied: 0, skipped: 0, excluded: plan.excluded };
+    const stats = { copied: 0, linked: 0, skipped: 0, excluded: plan.excluded };
     const installed = [];
 
     for (const action of plan.actions) {
@@ -98,9 +107,34 @@ export async function apply({
         }
       }
 
+      const linkDst = preserve
+        ? linkDestinationFor({ sourceDir, bySrc, action })
+        : null;
+
+      if (linkDst) {
+        const wrote = dryRun
+          ? true
+          : writeSymlink(target, dst, linkDst);
+        if (wrote) {
+          log(`  link      ${action.relDst}  -> ${linkDst}`);
+          stats.linked++;
+          installed.push({
+            path: toPosix(action.relDst),
+            fromSource: toPosix(action.relSrc),
+            sha256: hashBuffer(fs.readFileSync(src)),
+            agent: action.agent ?? null,
+            symlinkTo: linkDst,
+          });
+          continue;
+        }
+        // symlink creation failed (e.g. unprivileged Windows) — fall through to copy.
+        console.warn(`  warn      could not symlink ${action.relDst}; copying instead`);
+      }
+
       const label = action.relDst === action.relSrc ? "copy" : "render";
       const suffix = action.relDst !== action.relSrc ? `  (from ${action.relSrc})` : "";
       if (!dryRun) {
+        removeIfSymlink(dst);
         fs.copyFileSync(src, dst);
       }
       log(`  ${label.padEnd(9)} ${action.relDst}${suffix}`);
@@ -132,6 +166,7 @@ export async function apply({
         commit: commit ?? null,
         installedAt: prev?.installedAt ?? now,
         updatedAt: now,
+        preserveSymlinks: preserve,
         agents: mergeAgents(prev?.agents ?? [], agents.map((a) => a.id)),
         files: mergeFiles(prev?.files ?? [], installed),
       };
@@ -142,7 +177,7 @@ export async function apply({
 
     console.log("");
     console.log(
-      `${dryRun ? "[dry-run] " : ""}done. copied: ${stats.copied}, skipped: ${stats.skipped}, excluded: ${stats.excluded}`
+      `${dryRun ? "[dry-run] " : ""}done. copied: ${stats.copied}${preserve ? `, linked: ${stats.linked}` : ""}, skipped: ${stats.skipped}, excluded: ${stats.excluded}`
     );
   } finally {
     await cleanup();
@@ -263,6 +298,79 @@ export function walk(root) {
 
 function log(msg) {
   console.log(msg);
+}
+
+// ---- symlink preservation -------------------------------------------------
+
+export function actionsBySrc(actions) {
+  const map = new Map();
+  for (const a of actions) {
+    const key = toPosix(a.relSrc);
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(a);
+  }
+  return map;
+}
+
+// If the source file behind `action` is a symlink whose target is inside the
+// source tree AND that target is also being installed, return the installed
+// destination (project-relative posix path) the link should point at.
+// Returns null when the file isn't a link, the link escapes the source tree,
+// or its target isn't part of this install (excluded, other agents only) —
+// callers fall back to copying content, which matches pre-flag behavior.
+export function linkDestinationFor({ sourceDir, bySrc, action }) {
+  const abs = path.join(sourceDir, action.relSrc);
+  let lst;
+  try {
+    lst = fs.lstatSync(abs);
+  } catch {
+    return null;
+  }
+  if (!lst.isSymbolicLink()) return null;
+
+  const resolvedTarget = path.resolve(path.dirname(abs), fs.readlinkSync(abs));
+  const targetRel = path.relative(sourceDir, resolvedTarget);
+  if (targetRel.startsWith("..") || path.isAbsolute(targetRel)) return null;
+
+  const candidates = bySrc.get(toPosix(targetRel)) ?? [];
+  // Prefer the target rendered for the same agent, then a verbatim install.
+  const sameAgent = candidates.find((c) => c.agent === action.agent);
+  const verbatim = candidates.find((c) => toPosix(c.relDst) === toPosix(targetRel));
+  const chosen = sameAgent ?? verbatim ?? null;
+  if (!chosen) return null;
+  const relDst = toPosix(chosen.relDst);
+  return relDst === toPosix(action.relDst) ? null : relDst; // never self-link
+}
+
+// Create a relative symlink at dst pointing to linkDst (project-relative).
+// Returns false when the platform refuses (e.g. unprivileged Windows).
+export function writeSymlink(target, dst, linkDst) {
+  const linkValue = path.relative(path.dirname(dst), path.join(target, linkDst));
+  try {
+    fs.rmSync(dst, { force: true });
+    fs.symlinkSync(linkValue, dst);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function expectedLinkValue(target, dst, linkDst) {
+  return path.relative(path.dirname(dst), path.join(target, linkDst));
+}
+
+export function isSymlinkAt(p) {
+  try {
+    return fs.lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+// Copying onto a path that is currently a symlink would write THROUGH the
+// link and overwrite the canonical file it points at — remove the link first.
+export function removeIfSymlink(p) {
+  if (isSymlinkAt(p)) fs.rmSync(p, { force: true });
 }
 
 export { DEFAULT_EXCLUDES };

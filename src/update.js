@@ -11,7 +11,17 @@ import {
   sourceKey,
   LOCKFILE_NAME,
 } from "./lockfile.js";
-import { DEFAULT_EXCLUDES, planFiles, walk } from "./apply.js";
+import {
+  DEFAULT_EXCLUDES,
+  planFiles,
+  walk,
+  actionsBySrc,
+  linkDestinationFor,
+  writeSymlink,
+  expectedLinkValue,
+  isSymlinkAt,
+  removeIfSymlink,
+} from "./apply.js";
 
 export async function update({
   target,
@@ -24,6 +34,7 @@ export async function update({
   include,
   exclude,
   agents: agentsOverride,
+  preserveSymlinks: preserveOverride = null,
 }) {
   const lock = readLockfile(target);
   if (!lock || !lock.sources || lock.sources.length === 0) {
@@ -66,6 +77,9 @@ export async function update({
     JSON.stringify([...agentIds].sort()) !==
       JSON.stringify([...(entry.agents ?? [])].sort());
 
+  // Explicit flag wins; otherwise use what this source was installed with.
+  const preserve = preserveOverride ?? entry.preserveSymlinks ?? false;
+
   const resolved = await resolveSource(source);
   const { dir: sourceDir, cleanup, kind, ref, commit } = resolved;
 
@@ -79,6 +93,7 @@ export async function update({
       includeRes,
       excludeRes,
     });
+    const bySrc = actionsBySrc(plan.actions);
 
     const lockByPath = new Map((entry.files ?? []).map((f) => [f.path, f]));
     const planByPath = new Map(plan.actions.map((a) => [toPosix(a.relDst), a]));
@@ -88,6 +103,7 @@ export async function update({
     );
     console.log(`target:  ${target}`);
     console.log(`agents:  ${agents.map((a) => a.id).join(", ")}`);
+    if (preserve) console.log("mode:    preserving source symlinks");
     if (dryRun) console.log("mode:    dry-run (no changes will be made)");
     console.log("");
 
@@ -100,17 +116,62 @@ export async function update({
       const dstDir = path.dirname(dst);
       const prevEntry = lockByPath.get(relDst);
 
-      const localHash = fs.existsSync(dst) ? hashFile(dst) : null;
+      const linkDst = preserve
+        ? linkDestinationFor({ sourceDir, bySrc, action })
+        : null;
+      const isLink = isSymlinkAt(dst);
+      const wasOurLink = Boolean(prevEntry?.symlinkTo);
+      const localHash = safeHashFile(dst); // null when missing or dangling
       const sourceHash = hashFile(src);
 
-      if (localHash === sourceHash) {
+      if (linkDst) {
+        const correctLink =
+          isLink && fs.readlinkSync(dst) === expectedLinkValue(target, dst, linkDst);
+        if (correctLink && localHash === sourceHash) {
+          stats.unchanged++;
+          if (verbose) log(`  unchanged ${relDst}`);
+          newFiles.push({ agent: action.agent ?? null, ...buildEntry(action, sourceHash, linkDst) });
+          continue;
+        }
+        if (!isLink && localHash && prevEntry && prevEntry.sha256 !== localHash && !force) {
+          stats.drift++;
+          log(`  drift     ${relDst}  (locally modified, skipping; use --force to overwrite)`);
+          newFiles.push({ agent: action.agent ?? null, ...buildEntry(action, prevEntry.sha256) });
+          continue;
+        }
+        if (!fs.existsSync(dstDir)) {
+          if (!dryRun) fs.mkdirSync(dstDir, { recursive: true });
+        }
+        const wrote = dryRun ? true : writeSymlink(target, dst, linkDst);
+        if (wrote) {
+          if (!prevEntry) {
+            stats.added++;
+            log(`  add       ${relDst}  -> ${linkDst}`);
+          } else {
+            stats.written++;
+            log(`  link      ${relDst}  -> ${linkDst}`);
+          }
+          newFiles.push({ agent: action.agent ?? null, ...buildEntry(action, sourceHash, linkDst) });
+          continue;
+        }
+        console.warn(`  warn      could not symlink ${relDst}; copying instead`);
+        // fall through to the copy path below
+      }
+
+      // A link this tool created that should now be a copy (mode turned off,
+      // or the source stopped symlinking it) is materialized even when the
+      // content already matches. User-made symlinks are left alone.
+      const mustMaterialize = wasOurLink && isLink && !linkDst;
+
+      if (localHash === sourceHash && !mustMaterialize) {
         stats.unchanged++;
         if (verbose) log(`  unchanged ${relDst}`);
         newFiles.push({ agent: action.agent ?? null, ...buildEntry(action, sourceHash) });
         continue;
       }
 
-      if (localHash && prevEntry && prevEntry.sha256 !== localHash && !force) {
+      const ourLinkInPlace = wasOurLink && isLink;
+      if (localHash && prevEntry && prevEntry.sha256 !== localHash && !force && !ourLinkInPlace) {
         stats.drift++;
         log(`  drift     ${relDst}  (locally modified, skipping; use --force to overwrite)`);
         newFiles.push({ agent: action.agent ?? null, ...buildEntry(action, prevEntry.sha256) });
@@ -121,7 +182,10 @@ export async function update({
         if (!dryRun) fs.mkdirSync(dstDir, { recursive: true });
       }
 
-      if (!dryRun) fs.copyFileSync(src, dst);
+      if (!dryRun) {
+        removeIfSymlink(dst);
+        fs.copyFileSync(src, dst);
+      }
 
       if (!prevEntry) {
         stats.added++;
@@ -142,14 +206,20 @@ export async function update({
           continue;
         }
         const dst = path.join(target, relDst);
-        const localHash = fs.existsSync(dst) ? hashFile(dst) : null;
+        // lstat-based presence so dangling symlinks still get cleaned up.
+        const present = isSymlinkAt(dst) || fs.existsSync(dst);
+        const localHash = safeHashFile(dst);
 
-        if (!localHash) {
+        if (!present) {
           stats.pruned++;
           if (verbose) log(`  prune     ${relDst}  (already gone)`);
           continue;
         }
-        if (localHash !== prevEntry.sha256 && !force) {
+        // Links this tool created never count as local modifications — edits
+        // land in the canonical file the link points at, which is judged on
+        // its own path.
+        const ourLink = Boolean(prevEntry.symlinkTo) && isSymlinkAt(dst);
+        if (localHash && localHash !== prevEntry.sha256 && !force && !ourLink) {
           log(`  keep      ${relDst}  (locally modified; --force to prune anyway)`);
           newFiles.push(prevEntry);
           continue;
@@ -179,6 +249,7 @@ export async function update({
         commit: commit ?? null,
         installedAt: entry.installedAt,
         updatedAt: new Date().toISOString(),
+        preserveSymlinks: preserve,
         agents: agentsChanged ? agentIds : entry.agents,
         files: newFiles.sort((a, b) => a.path.localeCompare(b.path)),
       };
@@ -205,12 +276,21 @@ function collectOwnedPaths(lock, currentEntry) {
   return out;
 }
 
-function buildEntry(action, sha256) {
+function buildEntry(action, sha256, symlinkTo = null) {
   return {
     path: toPosix(action.relDst),
     fromSource: toPosix(action.relSrc),
     sha256,
+    ...(symlinkTo ? { symlinkTo } : {}),
   };
+}
+
+function safeHashFile(p) {
+  try {
+    return hashFile(p);
+  } catch {
+    return null;
+  }
 }
 
 function applyRefOverride(source, override) {

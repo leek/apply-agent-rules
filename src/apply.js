@@ -268,6 +268,9 @@ function mergeFiles(prev, next) {
 
 export function walk(root) {
   const out = [];
+  // Resolve the root once so containment checks compare real paths
+  // (e.g. macOS /tmp -> /private/tmp).
+  const realRoot = fs.realpathSync(root);
   const stack = [""];
   while (stack.length) {
     const rel = stack.pop();
@@ -283,13 +286,23 @@ export function walk(root) {
         // rules repos may symlink rule files (e.g. .claude/rules/* -> a
         // canonical CLAUDE.md); include them when they resolve to a file.
         // copyFileSync follows the link, so the target gets a regular file.
+        // Links that resolve outside the source tree are refused: a rules
+        // repo must not be able to pull arbitrary local files (keys, dotfiles)
+        // into the target project.
+        let real;
         try {
-          if (fs.statSync(path.join(abs, entry.name)).isFile()) {
-            out.push(childRel);
-          }
+          real = fs.realpathSync(path.join(abs, entry.name));
         } catch {
-          // dangling symlink — skip
+          continue; // dangling symlink — skip
         }
+        const relToRoot = path.relative(realRoot, real);
+        if (relToRoot.startsWith("..") || path.isAbsolute(relToRoot)) {
+          console.warn(
+            `  warn      skipping ${toPosix(childRel)}  (symlink points outside the source repo)`
+          );
+          continue;
+        }
+        if (fs.statSync(real).isFile()) out.push(childRel);
       }
     }
   }

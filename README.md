@@ -209,7 +209,8 @@ npx apply-agent-rules apply leek/filament-agent-rules --agents claude --preserve
 Details:
 
 - The mode is saved per source in the lockfile, so a plain `update` keeps it. Override per run with `--preserve-symlinks` / `--no-preserve-symlinks` — unedited files are converted in place (copies become links and vice versa); locally-modified files are never touched without `--force`.
-- A link is only recreated when its destination resolves **inside the source tree** and is installed by the same run (same agent). Anything else — links escaping the repo, dangling links, links to excluded files — falls back to the default copy behavior.
+- A link is only recreated when its destination is installed by the same run (same agent). A link to an excluded file, or to one installed only for other agents, falls back to the default copy behavior.
+- In every mode, some source symlinks are never installed: dangling links and links to directories are ignored, and links that resolve outside the source repo are skipped with a warning, so a rules repo can't copy files from your machine (keys, dotfiles) into the project.
 - Local edits belong in the canonical file; drift detection tracks it there. Links the tool created are never themselves flagged as drift.
 - On filesystems where symlink creation fails (e.g. unprivileged Windows), the tool warns and copies instead.
 

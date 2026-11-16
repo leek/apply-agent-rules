@@ -32,6 +32,9 @@
     "ai"
   ],
   "license": "MIT",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
   "dependencies": {
     "@clack/prompts": "^0.11.0"
   }

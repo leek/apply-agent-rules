@@ -271,21 +271,26 @@ export function walk(root) {
   // Resolve the root once so containment checks compare real paths
   // (e.g. macOS /tmp -> /private/tmp).
   const realRoot = fs.realpathSync(root);
-  const stack = [""];
+  // Each stack entry carries the real paths of the directories above it, so a
+  // directory symlink back into its own ancestry is detected as a cycle.
+  const stack = [{ rel: "", chain: new Set([realRoot]) }];
   while (stack.length) {
-    const rel = stack.pop();
+    const { rel, chain } = stack.pop();
     const abs = path.join(root, rel);
     const entries = fs.readdirSync(abs, { withFileTypes: true });
     for (const entry of entries) {
       const childRel = rel ? path.join(rel, entry.name) : entry.name;
       if (entry.isDirectory()) {
-        stack.push(childRel);
+        const realDir = fs.realpathSync(path.join(abs, entry.name));
+        stack.push({ rel: childRel, chain: new Set([...chain, realDir]) });
       } else if (entry.isFile()) {
         out.push(childRel);
       } else if (entry.isSymbolicLink()) {
-        // rules repos may symlink rule files (e.g. .claude/rules/* -> a
-        // canonical CLAUDE.md); include them when they resolve to a file.
-        // copyFileSync follows the link, so the target gets a regular file.
+        // Rules repos symlink rule files (.claude/rules/* -> a canonical
+        // CLAUDE.md) and skill directories (.claude/skills/x -> .agents/skills/x).
+        // File links are listed; directory links are walked, listing their
+        // files under the link's path. copyFileSync follows links, so the
+        // target gets regular files unless --preserve-symlinks applies.
         // Links that resolve outside the source tree are refused: a rules
         // repo must not be able to pull arbitrary local files (keys, dotfiles)
         // into the target project.
@@ -302,7 +307,23 @@ export function walk(root) {
           );
           continue;
         }
-        if (fs.statSync(real).isFile()) out.push(childRel);
+        const st = fs.statSync(real);
+        if (st.isFile()) {
+          out.push(childRel);
+        } else if (st.isDirectory()) {
+          // A loop when the target contains a directory we are already in.
+          const loops = [...chain].some((c) => {
+            const r = path.relative(real, c);
+            return !r.startsWith("..") && !path.isAbsolute(r);
+          });
+          if (loops) {
+            console.warn(
+              `  warn      skipping ${toPosix(childRel)}  (symlink loops back to a parent directory)`
+            );
+            continue;
+          }
+          stack.push({ rel: childRel, chain: new Set([...chain, real]) });
+        }
       }
     }
   }
@@ -325,25 +346,27 @@ export function actionsBySrc(actions) {
   return map;
 }
 
-// If the source file behind `action` is a symlink whose target is inside the
-// source tree AND that target is also being installed, return the installed
-// destination (project-relative posix path) the link should point at.
-// Returns null when the file isn't a link, the link escapes the source tree,
+// If the source file behind `action` is reached through a symlink — the file
+// itself, or a symlinked directory above it — and its real file is inside the
+// source tree AND also being installed, return the installed destination
+// (project-relative posix path) the link should point at. A file under a
+// symlinked directory gets its own file-level link, so the target never holds
+// directory links the lockfile can't track.
+// Returns null when no link is involved, the link escapes the source tree,
 // or its target isn't part of this install (excluded, other agents only) —
 // callers fall back to copying content, which matches pre-flag behavior.
 export function linkDestinationFor({ sourceDir, bySrc, action }) {
-  const abs = path.join(sourceDir, action.relSrc);
-  let lst;
+  let realRoot;
+  let realFile;
   try {
-    lst = fs.lstatSync(abs);
+    realRoot = fs.realpathSync(sourceDir);
+    realFile = fs.realpathSync(path.join(sourceDir, action.relSrc));
   } catch {
     return null;
   }
-  if (!lst.isSymbolicLink()) return null;
-
-  const resolvedTarget = path.resolve(path.dirname(abs), fs.readlinkSync(abs));
-  const targetRel = path.relative(sourceDir, resolvedTarget);
+  const targetRel = path.relative(realRoot, realFile);
   if (targetRel.startsWith("..") || path.isAbsolute(targetRel)) return null;
+  if (toPosix(targetRel) === toPosix(action.relSrc)) return null; // not a link
 
   const candidates = bySrc.get(toPosix(targetRel)) ?? [];
   // Prefer the target rendered for the same agent, then a verbatim install.

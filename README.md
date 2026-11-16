@@ -210,7 +210,8 @@ Details:
 
 - The mode is saved per source in the lockfile, so a plain `update` keeps it. Override per run with `--preserve-symlinks` / `--no-preserve-symlinks` — unedited files are converted in place (copies become links and vice versa); locally-modified files are never touched without `--force`.
 - A link is only recreated when its destination is installed by the same run (same agent). A link to an excluded file, or to one installed only for other agents, falls back to the default copy behavior.
-- In every mode, some source symlinks are never installed: dangling links and links to directories are ignored, and links that resolve outside the source repo are skipped with a warning, so a rules repo can't copy files from your machine (keys, dotfiles) into the project.
+- Directory symlinks (e.g. `.claude/skills/filament-forms -> ../../.agents/skills/filament-forms`) are followed: their files install under the link's path. With `--preserve-symlinks` each of those files becomes its own relative link to the canonical file (`.claude/skills/filament-forms/SKILL.md -> ../../../.agents/skills/filament-forms/SKILL.md`); the directory itself is a real directory.
+- In every mode, some source symlinks are never installed: dangling links are ignored, directory links that loop back to a parent are skipped, and links that resolve outside the source repo are skipped with a warning, so a rules repo can't copy files from your machine (keys, dotfiles) into the project.
 - Local edits belong in the canonical file; drift detection tracks it there. Links the tool created are never themselves flagged as drift.
 - On filesystems where symlink creation fails (e.g. unprivileged Windows), the tool warns and copies instead.
 

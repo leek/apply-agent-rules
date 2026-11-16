@@ -40,6 +40,24 @@ test("walk follows in-repo file symlinks and refuses ones escaping the repo", ()
   ]);
 });
 
+test("walk follows directory symlinks one level deep, so links can't fan out", () => {
+  const repo = tmpdir();
+  const N = 25; // two links per level: 2^25 paths if nested links were followed
+  for (let i = 0; i <= N; i++) {
+    fs.mkdirSync(path.join(repo, `d${i}`));
+    fs.writeFileSync(path.join(repo, `d${i}`, "f.md"), String(i));
+  }
+  for (let i = 0; i < N; i++) {
+    fs.symlinkSync(`../d${i + 1}`, path.join(repo, `d${i}`, "a"));
+    fs.symlinkSync(`../d${i + 1}`, path.join(repo, `d${i}`, "b"));
+  }
+  const files = walk(repo).map((f) => f.split(path.sep).join("/"));
+  // each real file once, plus one copy per link of its target's own file
+  assert.equal(files.length, N + 1 + 2 * N);
+  assert.ok(files.includes("d0/a/f.md"));
+  assert.ok(!files.includes("d0/a/a/f.md"));
+});
+
 test("walk lists files under in-repo directory symlinks and stops at loops", () => {
   const outside = tmpdir();
   const repo = tmpdir();

@@ -272,17 +272,21 @@ export function walk(root) {
   // (e.g. macOS /tmp -> /private/tmp).
   const realRoot = fs.realpathSync(root);
   // Each stack entry carries the real paths of the directories above it, so a
-  // directory symlink back into its own ancestry is detected as a cycle.
-  const stack = [{ rel: "", chain: new Set([realRoot]) }];
+  // directory symlink back into its own ancestry is detected as a cycle, and
+  // whether it was reached through a directory symlink. Directory links are
+  // followed one level deep only: a link inside a linked directory is not
+  // followed, so links can't fan out into exponentially many paths and the
+  // walk stays proportional to the repo's size.
+  const stack = [{ rel: "", chain: new Set([realRoot]), viaLink: false }];
   while (stack.length) {
-    const { rel, chain } = stack.pop();
+    const { rel, chain, viaLink } = stack.pop();
     const abs = path.join(root, rel);
     const entries = fs.readdirSync(abs, { withFileTypes: true });
     for (const entry of entries) {
       const childRel = rel ? path.join(rel, entry.name) : entry.name;
       if (entry.isDirectory()) {
         const realDir = fs.realpathSync(path.join(abs, entry.name));
-        stack.push({ rel: childRel, chain: new Set([...chain, realDir]) });
+        stack.push({ rel: childRel, chain: new Set([...chain, realDir]), viaLink });
       } else if (entry.isFile()) {
         out.push(childRel);
       } else if (entry.isSymbolicLink()) {
@@ -311,6 +315,12 @@ export function walk(root) {
         if (st.isFile()) {
           out.push(childRel);
         } else if (st.isDirectory()) {
+          if (viaLink) {
+            console.warn(
+              `  warn      skipping ${toPosix(childRel)}  (directory symlink inside a symlinked directory)`
+            );
+            continue;
+          }
           // A loop when the target contains a directory we are already in.
           const loops = [...chain].some((c) => {
             const r = path.relative(real, c);
@@ -322,7 +332,7 @@ export function walk(root) {
             );
             continue;
           }
-          stack.push({ rel: childRel, chain: new Set([...chain, real]) });
+          stack.push({ rel: childRel, chain: new Set([...chain, real]), viaLink: true });
         }
       }
     }

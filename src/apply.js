@@ -107,9 +107,11 @@ export async function apply({
         }
       }
 
-      const linkDst = preserve
+      const wantedLink = preserve
         ? linkDestinationFor({ sourceDir, bySrc, action })
         : null;
+      // Already the canonical file via a directory link: install it as a copy.
+      const linkDst = wantedLink && !reachesLinkTarget(target, dst, wantedLink) ? wantedLink : null;
 
       if (linkDst) {
         const wrote = dryRun
@@ -386,6 +388,22 @@ export function linkDestinationFor({ sourceDir, bySrc, action }) {
   if (!chosen) return null;
   const relDst = toPosix(chosen.relDst);
   return relDst === toPosix(action.relDst) ? null : relDst; // never self-link
+}
+
+// True when dst, resolved through any directory symlinks above it, is the
+// very path linkDst names: the target project already reaches the canonical
+// file through a linked directory (.claude/skills/x -> .agents/skills/x), so
+// a file-level link at dst would replace that file with a link to itself.
+export function reachesLinkTarget(target, dst, linkDst) {
+  const resolve = (p) => {
+    try {
+      return path.join(fs.realpathSync(path.dirname(p)), path.basename(p));
+    } catch {
+      return null;
+    }
+  };
+  const viaDst = resolve(dst);
+  return viaDst !== null && viaDst === resolve(path.join(target, linkDst));
 }
 
 // Create a relative symlink at dst pointing to linkDst (project-relative).

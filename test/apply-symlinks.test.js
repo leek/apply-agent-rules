@@ -64,3 +64,47 @@ test("update --preserve-symlinks converts copies from an earlier default install
   assert.equal(fs.lstatSync(dst).isSymbolicLink(), true);
   assert.equal(fs.readFileSync(dst, "utf8"), "skill v1");
 });
+
+// The target already links .claude/skills/forms to .agents/skills/forms (as
+// streamaba does), so .claude/skills/forms/SKILL.md IS the canonical file.
+function linkTargetSkillDir(target) {
+  fs.mkdirSync(path.join(target, ".agents", "skills", "forms"), { recursive: true });
+  fs.mkdirSync(path.join(target, ".claude", "skills"), { recursive: true });
+  fs.symlinkSync("../../.agents/skills/forms", path.join(target, ".claude", "skills", "forms"));
+}
+
+const CANONICAL = path.join(".agents", "skills", "forms", "SKILL.md");
+
+test("--preserve-symlinks never links a file to itself through a target directory link", () => {
+  const repo = makeRepo();
+  const target = tmpdir();
+  linkTargetSkillDir(target);
+  run("apply", repo, "--agents", "claude", "--target", target, "--preserve-symlinks");
+  const canonical = path.join(target, CANONICAL);
+  assert.equal(fs.lstatSync(canonical).isSymbolicLink(), false);
+  assert.equal(fs.readFileSync(canonical, "utf8"), "skill v1");
+
+  fs.writeFileSync(path.join(repo, ".agents", "skills", "forms", "SKILL.md"), "skill v2");
+  run("update", "--target", target);
+  assert.equal(fs.lstatSync(canonical).isSymbolicLink(), false);
+  assert.equal(fs.readFileSync(canonical, "utf8"), "skill v2");
+});
+
+test("update repairs a self-referencing link an earlier version wrote", () => {
+  const repo = makeRepo();
+  const target = tmpdir();
+  linkTargetSkillDir(target);
+  run("apply", repo, "--agents", "claude", "--target", target, "--preserve-symlinks");
+  const canonical = path.join(target, CANONICAL);
+  fs.rmSync(canonical);
+  fs.symlinkSync("../../../.agents/skills/forms/SKILL.md", canonical);
+  const lockPath = path.join(target, ".apply-agent-rules.lock.json");
+  const lock = fs.readFileSync(lockPath, "utf8");
+  fs.writeFileSync(
+    lockPath,
+    lock.replace(/("path": "\.claude\/skills\/forms\/SKILL\.md",[^}]*?"sha256": "[0-9a-f]+")/, '$1,\n          "symlinkTo": ".agents/skills/forms/SKILL.md"'),
+  );
+  run("update", "--target", target);
+  assert.equal(fs.lstatSync(canonical).isSymbolicLink(), false);
+  assert.equal(fs.readFileSync(canonical, "utf8"), "skill v1");
+});

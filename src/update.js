@@ -21,6 +21,7 @@ import {
   expectedLinkValue,
   isSymlinkAt,
   removeIfSymlink,
+  reachesLinkTarget,
 } from "./apply.js";
 
 export async function update({
@@ -116,9 +117,12 @@ export async function update({
       const dstDir = path.dirname(dst);
       const prevEntry = lockByPath.get(relDst);
 
-      const linkDst = preserve
+      const wantedLink = preserve
         ? linkDestinationFor({ sourceDir, bySrc, action })
         : null;
+      // Already the canonical file via a directory link: keep it a copy (and
+      // materialize a self-referencing link an earlier version wrote there).
+      const linkDst = wantedLink && !reachesLinkTarget(target, dst, wantedLink) ? wantedLink : null;
       const isLink = isSymlinkAt(dst);
       const wasOurLink = Boolean(prevEntry?.symlinkTo);
       const localHash = safeHashFile(dst); // null when missing or dangling
